@@ -3,7 +3,7 @@ package lru
 import (
 	"sync"
 
-	"github.com/hashicorp/golang-lru/simplelru"
+	"github.com/bserdar/golang-lru/simplelru"
 )
 
 // Cache is a thread-safe fixed size LRU cache.
@@ -19,7 +19,7 @@ func New(size int) (*Cache, error) {
 
 // NewWithEvict constructs a fixed size cache with the given eviction
 // callback.
-func NewWithEvict(size int, onEvicted func(key interface{}, value interface{})) (*Cache, error) {
+func NewWithEvict(size int, onEvicted func(key interface{}, value interface{}, size int)) (*Cache, error) {
 	lru, err := simplelru.NewLRU(size, simplelru.EvictCallback(onEvicted))
 	if err != nil {
 		return nil, err
@@ -38,9 +38,9 @@ func (c *Cache) Purge() {
 }
 
 // Add adds a value to the cache.  Returns true if an eviction occurred.
-func (c *Cache) Add(key, value interface{}) (evicted bool) {
+func (c *Cache) Add(key, value interface{}, size int) (evicted bool) {
 	c.lock.Lock()
-	evicted = c.lru.Add(key, value)
+	evicted = c.lru.Add(key, value, size)
 	c.lock.Unlock()
 	return evicted
 }
@@ -74,14 +74,14 @@ func (c *Cache) Peek(key interface{}) (value interface{}, ok bool) {
 // ContainsOrAdd checks if a key is in the cache  without updating the
 // recent-ness or deleting it for being stale,  and if not, adds the value.
 // Returns whether found and whether an eviction occurred.
-func (c *Cache) ContainsOrAdd(key, value interface{}) (ok, evicted bool) {
+func (c *Cache) ContainsOrAdd(key, value interface{}, size int) (ok, evicted bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	if c.lru.Contains(key) {
 		return true, false
 	}
-	evicted = c.lru.Add(key, value)
+	evicted = c.lru.Add(key, value, size)
 	return false, evicted
 }
 
@@ -113,4 +113,12 @@ func (c *Cache) Len() int {
 	length := c.lru.Len()
 	c.lock.RUnlock()
 	return length
+}
+
+// Size returns the size of the cache
+func (c *Cache) Size() int {
+	c.lock.RLock()
+	size := c.lru.Size()
+	c.lock.RUnlock()
+	return size
 }

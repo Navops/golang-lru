@@ -6,29 +6,31 @@ import (
 )
 
 // EvictCallback is used to get a callback when a cache entry is evicted
-type EvictCallback func(key interface{}, value interface{})
+type EvictCallback func(key interface{}, value interface{}, size int)
 
-// LRU implements a non-thread safe fixed size LRU cache
+// LRU implements a non-thread safe size-aware LRU cache
 type LRU struct {
-	size      int
-	evictList *list.List
-	items     map[interface{}]*list.Element
-	onEvict   EvictCallback
+	currentSize int
+	sizeLimit   int
+	evictList   *list.List
+	items       map[interface{}]*list.Element
+	onEvict     EvictCallback
 }
 
 // entry is used to hold a value in the evictList
 type entry struct {
 	key   interface{}
 	value interface{}
+	size  int
 }
 
-// NewLRU constructs an LRU of the given size
-func NewLRU(size int, onEvict EvictCallback) (*LRU, error) {
-	if size <= 0 {
-		return nil, errors.New("Must provide a positive size")
+// NewLRU constructs an LRU that should occupy approximately the given size in memory
+func NewLRU(sizeLimit int, onEvict EvictCallback) (*LRU, error) {
+	if sizeLimit <= 0 {
+		return nil, errors.New("Must provide a positive size limit")
 	}
 	c := &LRU{
-		size:      size,
+		sizeLimit: sizeLimit,
 		evictList: list.New(),
 		items:     make(map[interface{}]*list.Element),
 		onEvict:   onEvict,
@@ -40,33 +42,39 @@ func NewLRU(size int, onEvict EvictCallback) (*LRU, error) {
 func (c *LRU) Purge() {
 	for k, v := range c.items {
 		if c.onEvict != nil {
-			c.onEvict(k, v.Value.(*entry).value)
+			e := v.Value.(*entry)
+			c.onEvict(k, e.value, e.size)
 		}
 		delete(c.items, k)
 	}
 	c.evictList.Init()
+	c.currentSize = 0
 }
 
 // Add adds a value to the cache.  Returns true if an eviction occurred.
-func (c *LRU) Add(key, value interface{}) (evicted bool) {
+func (c *LRU) Add(key, value interface{}, size int) (evicted bool) {
 	// Check for existing item
 	if ent, ok := c.items[key]; ok {
 		c.evictList.MoveToFront(ent)
-		ent.Value.(*entry).value = value
+		e := ent.Value.(*entry)
+		e.value = value
+		c.currentSize -= e.size
+		e.size = size
+		c.currentSize += size
 		return false
 	}
 
 	// Add new item
-	ent := &entry{key, value}
+	ent := &entry{key, value, size}
 	entry := c.evictList.PushFront(ent)
 	c.items[key] = entry
+	c.currentSize += size
 
-	evict := c.evictList.Len() > c.size
-	// Verify size not exceeded
-	if evict {
+	for c.sizeLimit < c.currentSize {
 		c.removeOldest()
+		evicted = true
 	}
-	return evict
+	return evicted
 }
 
 // Get looks up a key's value from the cache.
@@ -142,6 +150,11 @@ func (c *LRU) Len() int {
 	return c.evictList.Len()
 }
 
+// Size returns the current size of the cache.
+func (c *LRU) Size() int {
+	return c.currentSize
+}
+
 // removeOldest removes the oldest item from the cache.
 func (c *LRU) removeOldest() {
 	ent := c.evictList.Back()
@@ -155,7 +168,8 @@ func (c *LRU) removeElement(e *list.Element) {
 	c.evictList.Remove(e)
 	kv := e.Value.(*entry)
 	delete(c.items, kv.key)
+	c.currentSize -= kv.size
 	if c.onEvict != nil {
-		c.onEvict(kv.key, kv.value)
+		c.onEvict(kv.key, kv.value, kv.size)
 	}
 }
