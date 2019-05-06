@@ -1,6 +1,8 @@
 golang-lru
 ==========
 
+[![GoDoc](https://godoc.org/github.com/bserdar/golang-lru?status.svg)](https://godoc.org/github.com/bserdar/golang-lru)
+
 This provides the `lru` package which implements a fixed-size thread
 safe LRU cache. It is based on the Hashicorp LRU cache, which is based
 on the cache in Groupcache. This package has two differences:
