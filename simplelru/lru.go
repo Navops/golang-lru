@@ -3,6 +3,7 @@ package simplelru
 import (
 	"container/list"
 	"errors"
+	"time"
 )
 
 // EvictCallback is used to get a callback when a cache entry is evicted
@@ -15,17 +16,28 @@ type LRU struct {
 	evictList   *list.List
 	items       map[interface{}]*list.Element
 	onEvict     EvictCallback
+	ttl         time.Duration
 }
 
 // entry is used to hold a value in the evictList
 type entry struct {
-	key   interface{}
-	value interface{}
-	size  int
+	key    interface{}
+	value  interface{}
+	size   int
+	expire time.Time
+}
+
+func (e entry) isExpired() bool {
+	return !e.expire.IsZero() && time.Now().After(e.expire)
 }
 
 // NewLRU constructs an LRU that should occupy approximately the given size in memory
 func NewLRU(sizeLimit int, onEvict EvictCallback) (*LRU, error) {
+	return NewLRUWithTTL(sizeLimit, 0, onEvict)
+}
+
+// NewLRUWithTTL constructs a LRU cache with a ttl for elements
+func NewLRUWithTTL(sizeLimit int, ttl time.Duration, onEvict EvictCallback) (*LRU, error) {
 	if sizeLimit <= 0 {
 		return nil, errors.New("Must provide a positive size limit")
 	}
@@ -34,6 +46,7 @@ func NewLRU(sizeLimit int, onEvict EvictCallback) (*LRU, error) {
 		evictList: list.New(),
 		items:     make(map[interface{}]*list.Element),
 		onEvict:   onEvict,
+		ttl:       ttl,
 	}
 	return c, nil
 }
@@ -61,11 +74,17 @@ func (c *LRU) Add(key, value interface{}, size int) (evicted bool) {
 		c.currentSize -= e.size
 		e.size = size
 		c.currentSize += size
+		if c.ttl != 0 {
+			e.expire = time.Now().Add(c.ttl)
+		}
 		return false
 	}
 
 	// Add new item
-	ent := &entry{key, value, size}
+	ent := &entry{key: key, value: value, size: size}
+	if c.ttl != 0 {
+		ent.expire = time.Now().Add(c.ttl)
+	}
 	entry := c.evictList.PushFront(ent)
 	c.items[key] = entry
 	c.currentSize += size
@@ -80,16 +99,28 @@ func (c *LRU) Add(key, value interface{}, size int) (evicted bool) {
 // Get looks up a key's value from the cache.
 func (c *LRU) Get(key interface{}) (value interface{}, ok bool) {
 	if ent, ok := c.items[key]; ok {
+		e := ent.Value.(*entry)
+		if e.isExpired() {
+			c.removeElement(ent)
+			return nil, false
+		}
 		c.evictList.MoveToFront(ent)
-		return ent.Value.(*entry).value, true
+		return e.value, true
 	}
 	return
 }
 
-// Contains checks if a key is in the cache, without updating the recent-ness
-// or deleting it for being stale.
+// Contains checks if a key is in the cache, without updating the
+// recent-ness. It may delete it if the key expired
 func (c *LRU) Contains(key interface{}) (ok bool) {
-	_, ok = c.items[key]
+	ent, ok := c.items[key]
+	if ok {
+		e := ent.Value.(*entry)
+		if e.isExpired() {
+			c.removeElement(ent)
+			ok = false
+		}
+	}
 	return ok
 }
 
@@ -98,7 +129,12 @@ func (c *LRU) Contains(key interface{}) (ok bool) {
 func (c *LRU) Peek(key interface{}) (value interface{}, ok bool) {
 	var ent *list.Element
 	if ent, ok = c.items[key]; ok {
-		return ent.Value.(*entry).value, true
+		e := ent.Value.(*entry)
+		if e.isExpired() {
+			c.removeElement(ent)
+			return nil, false
+		}
+		return e.value, true
 	}
 	return nil, ok
 }
@@ -126,10 +162,18 @@ func (c *LRU) RemoveOldest() (key interface{}, value interface{}, ok bool) {
 
 // GetOldest returns the oldest entry
 func (c *LRU) GetOldest() (key interface{}, value interface{}, ok bool) {
-	ent := c.evictList.Back()
-	if ent != nil {
-		kv := ent.Value.(*entry)
-		return kv.key, kv.value, true
+	for {
+		ent := c.evictList.Back()
+		if ent != nil {
+			kv := ent.Value.(*entry)
+			if kv.isExpired() {
+				c.removeElement(ent)
+				continue
+			}
+			return kv.key, kv.value, true
+		} else {
+			break
+		}
 	}
 	return nil, nil, false
 }

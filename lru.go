@@ -2,6 +2,7 @@ package lru
 
 import (
 	"sync"
+	"time"
 
 	"github.com/bserdar/golang-lru/simplelru"
 )
@@ -14,13 +15,24 @@ type Cache struct {
 
 // New creates an LRU of the given size.
 func New(size int) (*Cache, error) {
-	return NewWithEvict(size, nil)
+	return NewWithTTLEvict(size, 0, nil)
+}
+
+// NewWithTTL creates a LRU cache with the given size limit and a TTL
+// for its elements
+func NewWithTTL(sizeLimit int, ttl time.Duration) (*Cache, error) {
+	return NewWithTTLEvict(sizeLimit, ttl, nil)
 }
 
 // NewWithEvict constructs a fixed size cache with the given eviction
 // callback.
 func NewWithEvict(size int, onEvicted func(key interface{}, value interface{}, size int)) (*Cache, error) {
-	lru, err := simplelru.NewLRU(size, simplelru.EvictCallback(onEvicted))
+	return NewWithTTLEvict(size, 0, onEvicted)
+}
+
+// NewWithTTLEvict constructs a lru cache with given size limit, ttl for elements, and an onEvicted callback
+func NewWithTTLEvict(sizeLimit int, ttl time.Duration, onEvicted func(key interface{}, value interface{}, size int)) (*Cache, error) {
+	lru, err := simplelru.NewLRUWithTTL(sizeLimit, ttl, simplelru.EvictCallback(onEvicted))
 	if err != nil {
 		return nil, err
 	}
